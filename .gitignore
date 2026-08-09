@@ -1,0 +1,40 @@
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# ROS 2 and colcon outputs
+build/
+install/
+log/
+
+# Recorded and converted data
+bags/
+recordings/
+datasets/
+reports/
+work/
+*.db3
+*.mcap
+*.mp4
+*.parquet
+
+# Editors and operating systems
+.idea/
+.vscode/
+*~
+.DS_Store
+Thumbs.db

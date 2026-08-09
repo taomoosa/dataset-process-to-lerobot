@@ -1,0 +1,47 @@
+mock_cameras:
+  ros__parameters:
+    camera_ids: [camera_0, camera_1]
+    fps: 5.0
+    width: 640
+    height: 480
+    topic_root: /mock/cameras
+    frame_id_prefix: mock
+
+mock_robot_actions:
+  ros__parameters:
+    robot_ids: [robot_0, robot_1]
+    fps: 20.0
+    topic_root: /mock/robots
+    joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, gripper]
+    amplitudes: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.04]
+    frequency_hz: 0.2
+
+mock_robot_joint_positions:
+  ros__parameters:
+    robot_ids: [robot_0, robot_1]
+    fps: 20.0
+    topic_root: /mock/robots
+    joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, gripper]
+    offsets: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02]
+    amplitudes: [1.0, 0.8, 1.1, 0.9, 0.7, 1.2, 0.02]
+    frequency_hz: 0.1
+
+teleop_bag_recorder:
+  ros__parameters:
+    output_directory: bags
+    session_prefix: teleop
+    storage_id: sqlite3
+    topics:
+      - /mock/cameras/camera_0/rgb/image_raw
+      - /mock/cameras/camera_1/rgb/image_raw
+      - /mock/robots/robot_0/action
+      - /mock/robots/robot_1/action
+      - /mock/robots/robot_0/joint_states
+      - /mock/robots/robot_1/joint_states
+    discard_active_on_shutdown: true
+    auto.enabled: false
+    auto.session_count: 1
+    auto.duration_sec: 5.0
+    auto.pause_sec: 1.0
+    auto.start_delay_sec: 1.0
+    auto.exit_when_done: false
