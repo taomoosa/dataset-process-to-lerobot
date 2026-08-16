@@ -12,8 +12,16 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from .configuration import (
+    PROFILE_VERSION,
+    add_validation_config_argument,
+    dataset_argument_defaults,
+    effective_dataset_config,
+    parse_with_validation_profile,
+)
 from .doctor_evaluator import doctor_selection_report
 from .evaluator_contract import CONTRACT_NAME, EXIT_BLOCKED, EXIT_CLEAN, EXIT_FINDINGS
+from .history import append_history, history_entry
 from .lerobot_video_check import main as video_check_main
 from .report_utils import (
     SEVERITY_ORDER,
@@ -83,8 +91,21 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--report-dir", type=Path, default=Path("reports"))
     parser.add_argument("--summary-file", type=Path)
+    parser.add_argument(
+        "--history-file",
+        type=Path,
+        help=(
+            "append dataset-linked validation history (default: REPORT_DIR/validation-history.json)"
+        ),
+    )
+    add_validation_config_argument(parser)
     parser.add_argument("--doctor-command", default="lerobot-doctor")
-    parser.add_argument("--skip-doctor", action="store_true")
+    parser.set_defaults(skip_doctor=False)
+    doctor_mode = parser.add_mutually_exclusive_group()
+    doctor_mode.add_argument("--skip-doctor", action="store_true", default=argparse.SUPPRESS)
+    doctor_mode.add_argument(
+        "--run-doctor", action="store_false", dest="skip_doctor", default=argparse.SUPPRESS
+    )
     parser.add_argument("--fail-on", choices=("warn", "fail"), default="fail")
     parser.add_argument("--features", help="comma-separated video feature keys")
     parser.add_argument("--max-episodes", type=int)
@@ -107,7 +128,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args, _, config_source = parse_with_validation_profile(parser, argv, dataset_argument_defaults)
     dataset = args.dataset.expanduser().resolve()
     report_dir = args.report_dir.expanduser().resolve()
     summary_file = (
@@ -115,6 +137,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.summary_file
         else report_dir / "validation-summary.json"
     )
+    history_file = (
+        args.history_file.expanduser().resolve()
+        if args.history_file
+        else report_dir / "validation-history.json"
+    )
+    if history_file == summary_file:
+        print("History file and summary file must be different", file=sys.stderr)
+        return EXIT_BLOCKED
     if not dataset.is_dir():
         print(f"Dataset directory does not exist: {dataset}", file=sys.stderr)
         return EXIT_BLOCKED
@@ -269,6 +299,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="FAIL" if blockers else "PASS",
     )
     status = "blocked" if blockers else "findings" if deletable_indices else "pass"
+    effective_config = {
+        "version": PROFILE_VERSION,
+        "dataset": effective_dataset_config(args),
+    }
     summary = {
         "version": "1.0",
         "contract": CONTRACT_NAME,
@@ -288,15 +322,45 @@ def main(argv: Sequence[str] | None = None) -> int:
             for index in sorted(deletable_indices)
         ],
         "non_episode_blockers": blockers,
+        "validation_config": effective_config,
+        "validation_config_source": (str(config_source) if config_source is not None else None),
         "components": components,
         "artifacts": {
             "report_directory": str(report_dir),
+            "history": str(history_file),
         },
         "evaluator_return_code": max(
             (int(component["return_code"]) for component in components), default=0
         ),
     }
     write_json_atomic(summary, summary_file)
+    try:
+        append_history(
+            history_file,
+            history_entry(
+                "validation",
+                dataset,
+                result={
+                    "status": summary["status"],
+                    "overall_severity": summary["overall_severity"],
+                    "fail_on": summary["fail_on"],
+                    "deletable_episode_indices": summary["deletable_episode_indices"],
+                    "non_episode_blockers": summary["non_episode_blockers"],
+                    "components": summary["components"],
+                },
+                config=effective_config,
+                config_source=config_source,
+                details={"summary_file": str(summary_file)},
+            ),
+        )
+    except (OSError, ValueError) as error:
+        blockers.append(f"Could not append validation history: {error}")
+        summary["status"] = "blocked"
+        summary["overall_severity"] = "FAIL"
+        summary["non_episode_blockers"] = blockers
+        write_json_atomic(summary, summary_file)
+        print(blockers[-1], file=sys.stderr)
+        return EXIT_BLOCKED
     print(f"Wrote validation summary to {summary_file}", file=sys.stderr)
     if blockers:
         return EXIT_BLOCKED

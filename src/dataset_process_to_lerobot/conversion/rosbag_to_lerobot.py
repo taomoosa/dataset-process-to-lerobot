@@ -18,6 +18,12 @@ from typing import Any
 import numpy as np
 
 from dataset_process_to_lerobot.rosbag_utils import discover_rosbags
+from dataset_process_to_lerobot.validation.configuration import (
+    add_validation_config_argument,
+    effective_input_config,
+    input_argument_defaults,
+    parse_with_validation_profile,
+)
 
 from .conversion_validation import (
     ConversionInputValidator,
@@ -384,6 +390,8 @@ def write_conversion_manifest(result: dict[str, Any], path: Path) -> None:
         "fps": result["fps"],
         "input_validation_policy": result.get("validation_policy", "unknown"),
         "input_validation_drop_on": result.get("validation_drop_on", "unknown"),
+        "validation_config": result.get("validation_config"),
+        "validation_config_source": result.get("validation_config_source"),
         "input_episodes": result["input_episodes"],
         "converted_episodes": result["episodes"],
         "rejected_episodes": len(result["rejected_episodes"]),
@@ -616,6 +624,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir", required=True, type=Path, help="new local dataset directory"
     )
+    add_validation_config_argument(parser)
     parser.add_argument(
         "--repo-id", default="local/mock_teleop", help="dataset repository ID metadata"
     )
@@ -680,7 +689,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
-    args = parser.parse_args(argv)
+    args, _, config_source = parse_with_validation_profile(parser, argv, input_argument_defaults)
     try:
         locations = discover_rosbags(args.bags, args.bag_dir, recursive=args.recursive)
         topics = TopicSet(
@@ -711,6 +720,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             validation_policy=args.input_validation,
             validation_config=validation_config,
             validation_drop_on=args.input_validation_drop_on,
+        )
+        result["validation_config"] = effective_input_config(args)
+        result["validation_config_source"] = (
+            str(config_source) if config_source is not None else None
         )
     except Exception as error:
         if isinstance(error, InputValidationError) and args.input_validation_report:

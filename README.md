@@ -139,8 +139,7 @@ rosbag-to-lerobot \
   --repo-id local/teleop_v3 \
   --fps 10 \
   --task "operate both robots" \
-  --input-validation drop \
-  --input-validation-drop-on fail \
+  --validation-config config/validation.default.json \
   --input-validation-report reports/input-validation.json \
   --conversion-manifest reports/conversion-manifest.json
 ```
@@ -188,6 +187,23 @@ creating an empty dataset.
 
 ## 4. Validate a converted dataset
 
+Reusable validation policy and thresholds are stored in a JSON profile. Start with
+`config/validation.default.json`, keep project or hardware-specific variants under version control,
+and pass the selected profile to every validation command:
+
+```bash
+validate-lerobot-dataset \
+  datasets/teleop_v3 \
+  --validation-config config/validation.default.json \
+  --report-dir reports/teleop_v3
+```
+
+The profile has `input` settings for rosbag camera validation and `dataset` settings for the doctor
+threshold and encoded-video checks. Dataset paths, report directories, output names, task names,
+and archive destinations are intentionally not valid profile keys because they vary per run.
+Unknown keys, invalid types, and out-of-range values are rejected. Existing validation CLI options
+remain available for compatibility and an explicitly supplied CLI value overrides the JSON value.
+
 Each evaluator implements the same automation interface:
 
 ```text
@@ -223,6 +239,7 @@ Run the external `lerobot-doctor` command through its adapter:
 ```bash
 evaluate-lerobot-doctor \
   datasets/teleop_v3 \
+  --validation-config config/validation.default.json \
   --report-dir reports/teleop_v3/doctor \
   --result-file reports/teleop_v3/doctor/evaluation-result.json \
   --fail-on fail
@@ -233,10 +250,10 @@ Run the encoded-video evaluator through the same interface:
 ```bash
 evaluate-lerobot-video \
   datasets/teleop_v3 \
+  --validation-config config/validation.default.json \
   --report-dir reports/teleop_v3/video \
   --result-file reports/teleop_v3/video/evaluation-result.json \
-  --fail-on fail \
-  --freeze-min-seconds 1.0
+  --fail-on fail
 ```
 
 `evaluate-lerobot-doctor` stores the original doctor JSON, Markdown, stdout, and stderr beside its
@@ -265,8 +282,9 @@ The compatibility command below runs both checks and combines their selections:
 ```bash
 validate-lerobot-dataset \
   datasets/teleop_v3 \
+  --validation-config config/validation.default.json \
   --report-dir reports/teleop_v3 \
-  --fail-on fail
+  --history-file reports/teleop_v3/validation-history.json
 ```
 
 The command writes:
@@ -276,6 +294,12 @@ The command writes:
 - `lerobot-video-check.md`: human-readable temporal video findings
 - `lerobot-video-check.json`: structured episode findings for automation
 - `validation-summary.json`: combined status, deletable episode indices, and non-episode blockers
+- `validation-history.json`: append-only dataset identity, effective configuration, and result history
+
+History entries identify the dataset with its resolved path, frame and episode counts, and the
+SHA-256 digest of `meta/info.json`. The history is stored beside reports rather than inside the
+LeRobotDataset, so validation does not alter dataset metadata. Reusing `--history-file` across runs
+records how selections changed as thresholds or profiles changed.
 
 Run only the project video checker when `lerobot-doctor` is unavailable:
 
@@ -303,6 +327,7 @@ remove-failed-episodes \
   --report reports/teleop_v3/lerobot-video-check.json \
   --output-dir datasets/teleop_v3_clean \
   --result-file reports/teleop_v3/filter-result.json \
+  --history-file reports/teleop_v3/validation-history.json \
   --fail-on fail
 ```
 
@@ -327,7 +352,9 @@ reviewing the raw report.
 The result file is written even when no episodes need removal. Its `effective_dataset` field points
 to the source dataset when clean and to the newly filtered dataset otherwise. Results from
 `evaluate-lerobot-doctor`, `evaluate-lerobot-video`, and any conforming custom evaluator can be used
-with the same `--report` option.
+with the same `--report` option. When `--result-file` is used without `--history-file`, selection
+history defaults to `validation-history.json` beside the result file. Each entry includes hashes of
+the reports that justified the selection and identities for the source and effective datasets.
 
 ## 6. Archive rosbag2 recordings
 
@@ -362,6 +389,8 @@ process-teleop-dataset \
   --dataset-dir work/teleop_v3 \
   --clean-dataset-dir work/teleop_v3_clean \
   --report-dir work/reports \
+  --validation-config config/validation.default.json \
+  --history-file work/reports/validation-history.json \
   --archive-dir /path/to/archive \
   --archive-mode move \
   --archive-verify sha256 \
@@ -376,6 +405,8 @@ filtered automatically; a structural failure stops the workflow and leaves raw b
 first filtered dataset uses `--clean-dataset-dir`; additional filtering stages use sibling paths
 with the filter number and evaluator name appended. Input bags, datasets, reports, and archives must
 use non-overlapping directory trees; this is checked during preparation, including in dry-run mode.
+Every evaluator result, episode-selection operation, and post-filter validation is appended to the
+workflow history file, including results from contract-compatible external evaluators.
 
 Replace the defaults with any number of contract-compatible evaluators by repeating
 `--evaluation-stage NAME=COMMAND`. Commands are tokenized without a shell. Do not include the four

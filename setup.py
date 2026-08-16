@@ -16,7 +16,10 @@ setup(
             [f"resource/{PACKAGE_NAME}"],
         ),
         (f"share/{PACKAGE_NAME}", ["package.xml", "README.md", "LICENSE"]),
-        (f"share/{PACKAGE_NAME}/config", glob("config/*.yaml")),
+        (
+            f"share/{PACKAGE_NAME}/config",
+            [*glob("config/*.json"), *glob("config/*.yaml")],
+        ),
         (f"share/{PACKAGE_NAME}/launch", glob("launch/*.launch.py")),
     ],
     install_requires=["setuptools"],

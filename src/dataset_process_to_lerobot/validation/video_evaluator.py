@@ -7,6 +7,11 @@ import sys
 import uuid
 from collections.abc import Sequence
 
+from .configuration import (
+    effective_video_config,
+    parse_with_validation_profile,
+    video_evaluator_argument_defaults,
+)
 from .evaluator_contract import (
     EXIT_BLOCKED,
     add_common_evaluator_arguments,
@@ -45,7 +50,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args, _, config_source = parse_with_validation_profile(
+        parser, argv, video_evaluator_argument_defaults
+    )
     dataset = args.dataset.expanduser().resolve()
     report_dir = args.report_dir.expanduser().resolve()
     output_path = result_path(report_dir, args.result_file)
@@ -134,6 +142,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         error=error,
     )
+    result["validation_config"] = {
+        "fail_on": args.fail_on,
+        "video": effective_video_config(args),
+    }
+    result["validation_config_source"] = str(config_source) if config_source is not None else None
     write_json_atomic(result, output_path)
     print(f"Wrote evaluation result to {output_path}", file=sys.stderr)
     return exit_code_for_result(result)

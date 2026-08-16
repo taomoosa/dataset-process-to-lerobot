@@ -1,0 +1,39 @@
+{
+  "version": "1.0",
+  "input": {
+    "policy": "drop",
+    "drop_on": "fail",
+    "source_gap_min_seconds": 1.0,
+    "source_gap_factor": 5.0,
+    "source_drop_factor": 2.5,
+    "minimum_camera_source_frames": 2,
+    "duplicate_min_source_frames": 2,
+    "state_motion_threshold": 0.0001,
+    "max_findings": 100
+  },
+  "dataset": {
+    "fail_on": "fail",
+    "doctor": {
+      "enabled": true
+    },
+    "video": {
+      "features": null,
+      "max_episodes": null,
+      "thumbnail_size": 32,
+      "duplicate_threshold": 0.1,
+      "freeze_min_seconds": 1.0,
+      "repeat_threshold": 0.1,
+      "repeat_min_cycles": 3,
+      "repeat_max_period_seconds": 5.0,
+      "jump_percentile": 10.0,
+      "jump_min_score": 0.1,
+      "artifact_block_threshold": 20.0,
+      "artifact_min_block_fraction": 0.05,
+      "artifact_max_duration_frames": 3,
+      "flat_frame_std_threshold": 2.0,
+      "temporal_discontinuity_threshold": 5.0,
+      "state_motion_support_threshold": 0.02,
+      "max_findings": 100
+    }
+  }
+}

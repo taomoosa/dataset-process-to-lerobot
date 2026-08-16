@@ -16,6 +16,14 @@ from typing import Any
 from dataset_process_to_lerobot.conversion.rosbag_to_lerobot import main as conversion_main
 from dataset_process_to_lerobot.recording.archive_rosbags import archive_rosbags
 from dataset_process_to_lerobot.rosbag_utils import discover_rosbags
+from dataset_process_to_lerobot.validation.configuration import (
+    PROFILE_VERSION,
+    add_validation_config_argument,
+    effective_dataset_config,
+    effective_input_config,
+    parse_with_validation_profile,
+    workflow_argument_defaults,
+)
 from dataset_process_to_lerobot.validation.evaluator_contract import (
     EXIT_BLOCKED,
     EXIT_CLEAN,
@@ -23,6 +31,7 @@ from dataset_process_to_lerobot.validation.evaluator_contract import (
     exit_code_for_result,
     validate_evaluation_result,
 )
+from dataset_process_to_lerobot.validation.history import append_history, history_entry
 from dataset_process_to_lerobot.validation.remove_failed_episodes import main as removal_main
 from dataset_process_to_lerobot.validation.report_utils import read_json_object, write_json_atomic
 
@@ -55,6 +64,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-dir", required=True, type=Path)
     parser.add_argument("--clean-dataset-dir", type=Path)
     parser.add_argument("--report-dir", required=True, type=Path)
+    parser.add_argument(
+        "--history-file",
+        type=Path,
+        help=(
+            "append dataset validation and selection history "
+            "(default: REPORT_DIR/validation-history.json)"
+        ),
+    )
+    add_validation_config_argument(parser)
     parser.add_argument("--archive-dir", required=True, type=Path)
     parser.add_argument("--archive-mode", choices=("copy", "move"), default="copy")
     parser.add_argument("--archive-verify", choices=("size", "sha256"), default="sha256")
@@ -96,9 +114,15 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--doctor-command", default="lerobot-doctor")
-    parser.add_argument("--skip-doctor", action="store_true")
+    parser.set_defaults(skip_doctor=False)
+    doctor_mode = parser.add_mutually_exclusive_group()
+    doctor_mode.add_argument("--skip-doctor", action="store_true", default=argparse.SUPPRESS)
+    doctor_mode.add_argument(
+        "--run-doctor", action="store_false", dest="skip_doctor", default=argparse.SUPPRESS
+    )
     parser.add_argument("--fail-on", choices=("warn", "fail"), default="fail")
     parser.add_argument("--features")
+    parser.add_argument("--max-episodes", type=int)
     parser.add_argument("--thumbnail-size", type=int, default=32)
     parser.add_argument("--duplicate-threshold", type=float, default=0.1)
     parser.add_argument("--freeze-min-seconds", type=float, default=1.0)
@@ -200,6 +224,8 @@ def _default_evaluation_stages(args: argparse.Namespace) -> list[EvaluationStage
     ]
     if args.features:
         video_command.extend(("--features", args.features))
+    if args.max_episodes is not None:
+        video_command.extend(("--max-episodes", str(args.max_episodes)))
     stages.append(EvaluationStage("video", tuple(video_command)))
     return stages
 
@@ -304,6 +330,8 @@ def _conversion_arguments(
         "--max-input-findings",
         str(args.max_input_findings),
     ]
+    if args.validation_config:
+        arguments.extend(("--validation-config", str(args.validation_config)))
     for directory in args.bag_dir:
         arguments.extend(("--bag-dir", str(directory)))
     if args.recursive:
@@ -373,7 +401,8 @@ def _validate_workflow_paths(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args, _, config_source = parse_with_validation_profile(parser, argv, workflow_argument_defaults)
     dataset = args.dataset_dir.expanduser().resolve()
     clean_dataset = (
         args.clean_dataset_dir.expanduser().resolve()
@@ -383,6 +412,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_dir = args.report_dir.expanduser().resolve()
     archive_dir = args.archive_dir.expanduser().resolve()
     workflow_summary = report_dir / "workflow-summary.json"
+    history_file = (
+        args.history_file.expanduser().resolve()
+        if args.history_file
+        else report_dir / "validation-history.json"
+    )
     try:
         locations = discover_rosbags((), args.bag_dir, recursive=args.recursive)
         evaluator_stages = _evaluation_stages(args)
@@ -393,6 +427,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             report_dir=report_dir,
             archive_dir=archive_dir,
         )
+        if history_file == workflow_summary:
+            raise ValueError("history file and workflow summary must be different")
     except Exception as error:
         print(f"Could not prepare workflow: {error}", file=sys.stderr)
         return 2
@@ -407,16 +443,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         for stage in evaluator_stages:
             print(f"  {stage.name}: {shlex.join(stage.command)}")
         print(f"Reports: {report_dir}")
+        print(f"Validation history: {history_file}")
         print(f"Archive: {archive_dir} ({args.archive_mode}, {args.archive_verify})")
         return 0
 
     report_dir.mkdir(parents=True, exist_ok=True)
+    effective_config = {
+        "version": PROFILE_VERSION,
+        "input": effective_input_config(args),
+        "dataset": effective_dataset_config(args, max_findings_name="max_video_findings"),
+    }
     summary: dict[str, Any] = {
         "version": "2.0",
         "tool": "process-teleop-dataset",
         "status": "running",
         "input_bags": [str(location.path) for location in locations],
         "dataset": str(dataset),
+        "validation_config": effective_config,
+        "validation_config_source": (str(config_source) if config_source is not None else None),
+        "validation_history": str(history_file),
         "evaluation_stages": [
             {"name": stage.name, "command": list(stage.command)} for stage in evaluator_stages
         ],
@@ -470,6 +515,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             result_file=str(stage_reports / "evaluation-result.json"),
             deletable_episode_indices=result["deletable_episode_indices"],
         )
+        try:
+            append_history(
+                history_file,
+                history_entry(
+                    "validation",
+                    effective_dataset,
+                    result=result,
+                    config=effective_config,
+                    config_source=config_source,
+                    details={
+                        "stage": evaluator.name,
+                        "result_file": str(stage_reports / "evaluation-result.json"),
+                    },
+                ),
+            )
+        except (OSError, ValueError) as error:
+            summary["status"] = "blocked"
+            _write_stage(
+                summary,
+                workflow_summary,
+                f"history:{evaluator.name}",
+                "blocked",
+                message=str(error),
+            )
+            return EXIT_BLOCKED
         if status == EXIT_BLOCKED:
             summary["status"] = "blocked"
             write_json_atomic(summary, workflow_summary)
@@ -496,6 +566,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_repo_id,
                 "--result-file",
                 str(filter_result),
+                "--history-file",
+                str(history_file),
             ]
         )
         if removal_status != 0:
@@ -524,7 +596,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         post_filter_reports = stage_reports / "post-filter"
         post_error: str | None
         try:
-            post_status, _ = run_evaluation_stage(
+            post_status, post_result = run_evaluation_stage(
                 evaluator, effective_dataset, post_filter_reports, args.fail_on
             )
         except Exception as error:
@@ -533,6 +605,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             post_error = str(error)
         else:
             post_error = None
+            try:
+                append_history(
+                    history_file,
+                    history_entry(
+                        "validation",
+                        effective_dataset,
+                        result=post_result,
+                        config=effective_config,
+                        config_source=config_source,
+                        details={
+                            "stage": evaluator.name,
+                            "phase": "post_filter",
+                            "result_file": str(post_filter_reports / "evaluation-result.json"),
+                        },
+                    ),
+                )
+            except (OSError, ValueError) as error:
+                post_status = EXIT_BLOCKED
+                post_error = str(error)
         if post_status != EXIT_CLEAN:
             summary["status"] = "blocked"
             _write_stage(

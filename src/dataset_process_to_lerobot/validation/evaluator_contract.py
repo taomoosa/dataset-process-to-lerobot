@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+from .configuration import add_validation_config_argument
 from .report_utils import (
     SEVERITY_ORDER,
     episode_indices_from_report,
@@ -28,6 +29,7 @@ def add_common_evaluator_arguments(parser: argparse.ArgumentParser) -> None:
         help="normalized episode-selection result (default: REPORT_DIR/evaluation-result.json)",
     )
     parser.add_argument("--fail-on", choices=("warn", "fail"), default="fail")
+    add_validation_config_argument(parser)
 
 
 def result_path(report_dir: Path, requested: Path | None) -> Path:

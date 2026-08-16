@@ -14,6 +14,12 @@ from typing import Any
 
 import numpy as np
 
+from .configuration import (
+    add_validation_config_argument,
+    parse_with_validation_profile,
+    video_evaluator_argument_defaults,
+)
+
 VERSION = "0.1.0"
 SEVERITY_ORDER = {"PASS": 0, "WARN": 1, "FAIL": 2}
 
@@ -856,6 +862,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Check local LeRobotDataset v3 videos for temporal anomalies.",
     )
     parser.add_argument("dataset", type=Path)
+    add_validation_config_argument(parser)
     parser.add_argument("--features", help="comma-separated video feature keys")
     parser.add_argument("--max-episodes", type=int)
     parser.add_argument("--thumbnail-size", type=int, default=32)
@@ -910,7 +917,8 @@ def _validate_config(config: AnalysisConfig) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args, _, _ = parse_with_validation_profile(parser, argv, video_evaluator_argument_defaults)
     config = AnalysisConfig(
         thumbnail_size=args.thumbnail_size,
         duplicate_threshold=args.duplicate_threshold,

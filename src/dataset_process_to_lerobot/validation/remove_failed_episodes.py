@@ -8,7 +8,9 @@ import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
+from .history import append_history, dataset_identity, file_reference, history_entry
 from .report_utils import (
     blockers_from_report,
     episode_indices_from_report,
@@ -70,8 +72,57 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="always write the selected effective dataset and removed indices as JSON",
     )
+    parser.add_argument(
+        "--history-file",
+        type=Path,
+        help=("append selection history; defaults beside --result-file when that option is used"),
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
+
+
+def _record_selection(
+    args: argparse.Namespace,
+    dataset: Path,
+    result: dict[str, Any],
+) -> None:
+    if args.result_file:
+        write_json_atomic(result, args.result_file)
+    history_file = (
+        args.history_file.expanduser().resolve()
+        if args.history_file
+        else args.result_file.expanduser().resolve().parent / "validation-history.json"
+        if args.result_file
+        else None
+    )
+    if history_file is None:
+        return
+    if args.result_file and history_file == args.result_file.expanduser().resolve():
+        raise ValueError("History file and result file must be different")
+    effective = Path(str(result["effective_dataset"])).resolve()
+    append_history(
+        history_file,
+        history_entry(
+            "episode_selection",
+            dataset,
+            result={
+                "status": result["status"],
+                "removed_episode_indices": result["removed_episode_indices"],
+                "would_remove_episode_indices": result.get("would_remove_episode_indices", []),
+            },
+            config={
+                "fail_on": args.fail_on,
+                "explicit_episode_indices": sorted(set(args.episode)),
+            },
+            details={
+                "reports": [file_reference(path) for path in args.report],
+                "effective_dataset": dataset_identity(effective),
+                "result_file": (
+                    str(args.result_file.expanduser().resolve()) if args.result_file else None
+                ),
+            },
+        ),
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -90,16 +141,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         ordered = sorted(indices)
         if not ordered:
             print("No episodes matched the requested severity; no dataset was created.")
-            if args.result_file:
-                write_json_atomic(
-                    {
-                        "source_dataset": str(dataset_path),
-                        "effective_dataset": str(dataset_path),
-                        "output_dataset": None,
-                        "removed_episode_indices": [],
-                    },
-                    args.result_file,
-                )
+            _record_selection(
+                args,
+                dataset_path,
+                {
+                    "status": "no_change",
+                    "source_dataset": str(dataset_path),
+                    "effective_dataset": str(dataset_path),
+                    "output_dataset": None,
+                    "removed_episode_indices": [],
+                },
+            )
             return 0
         if len(ordered) == total_episodes:
             raise ValueError("Refusing to delete every episode")
@@ -107,18 +159,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise FileExistsError(f"Output directory already exists: {output_dir}")
         print(f"Episodes selected for deletion: {ordered}")
         if args.dry_run:
-            if args.result_file:
-                write_json_atomic(
-                    {
-                        "source_dataset": str(dataset_path),
-                        "effective_dataset": str(dataset_path),
-                        "output_dataset": None,
-                        "removed_episode_indices": [],
-                        "would_remove_episode_indices": ordered,
-                        "dry_run": True,
-                    },
-                    args.result_file,
-                )
+            _record_selection(
+                args,
+                dataset_path,
+                {
+                    "status": "dry_run",
+                    "source_dataset": str(dataset_path),
+                    "effective_dataset": str(dataset_path),
+                    "output_dataset": None,
+                    "removed_episode_indices": [],
+                    "would_remove_episode_indices": ordered,
+                    "dry_run": True,
+                },
+            )
             return 0
 
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -140,16 +193,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"Created {output_dir} with {result.meta.total_episodes} episodes and "
             f"{result.meta.total_frames} frames."
         )
-        if args.result_file:
-            write_json_atomic(
-                {
-                    "source_dataset": str(dataset_path),
-                    "effective_dataset": str(output_dir),
-                    "output_dataset": str(output_dir),
-                    "removed_episode_indices": ordered,
-                },
-                args.result_file,
-            )
+        _record_selection(
+            args,
+            dataset_path,
+            {
+                "status": "filtered",
+                "source_dataset": str(dataset_path),
+                "effective_dataset": str(output_dir),
+                "output_dataset": str(output_dir),
+                "removed_episode_indices": ordered,
+            },
+        )
         return 0
     except Exception as error:
         print(f"Could not remove failed episodes: {error}", file=sys.stderr)
